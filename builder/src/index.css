@@ -1,0 +1,14 @@
+@import "tailwindcss";
+
+/* Garante que o body e o root ocupem 100% da tela */
+html, body, #root {
+    height: 100%;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+}
+
+/* Remove estilos que o template original adicionava */
+* {
+    box-sizing: border-box;
+}
