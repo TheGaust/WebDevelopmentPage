@@ -14,6 +14,72 @@ const BREAKPOINTS = {
 const GRID_SIZE = 10;
 const SNAP_THRESHOLD = 5;
 
+const GRADIENT_DIRECTIONS = [
+  { value: "to right", label: "Esquerda → Direita" },
+  { value: "to left", label: "Direita → Esquerda" },
+  { value: "to bottom", label: "Topo → Baixo" },
+  { value: "to top", label: "Baixo → Topo" },
+  { value: "to bottom right", label: "Topo-Esq → Baixo-Dir" },
+  { value: "to bottom left", label: "Topo-Dir → Baixo-Esq" },
+  { value: "to top right", label: "Baixo-Esq → Topo-Dir" },
+  { value: "to top left", label: "Baixo-Dir → Topo-Esq" },
+];
+
+function clamp(n, min, max) {
+  const v = Number(n);
+  if (Number.isNaN(v)) return min;
+  return Math.max(min, Math.min(max, v));
+}
+
+function isHexColor(value) {
+  if (typeof value !== "string") return false;
+  const v = value.trim();
+  return /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(v);
+}
+
+function safeHex(value, fallback = "#ffffff") {
+  return isHexColor(value) ? value : fallback;
+}
+
+function normalizeStops(stops) {
+  if (!Array.isArray(stops) || stops.length < 2) {
+    return [
+      { color: "#3b82f6", pos: 0 },
+      { color: "#22c55e", pos: 100 },
+    ];
+  }
+  return stops.map((s, idx) => ({
+    color: s?.color || "#000000",
+    pos: clamp(s?.pos ?? idx * (100 / Math.max(1, stops.length - 1)), 0, 100),
+  }));
+}
+
+const DEFAULT_GRADIENT = {
+  enabled: true,
+  type: "linear",
+  direction: "to right",
+  stops: [
+    { color: "#3b82f6", pos: 0 },
+    { color: "#22c55e", pos: 100 },
+  ],
+};
+
+function gradientToCss(meta) {
+  if (!meta || !meta.enabled) return "";
+  const type = meta.type || "linear";
+  const dir = meta.direction || "to right";
+  const stops = normalizeStops(meta.stops);
+  const stopsStr = stops.map((s) => `${s.color} ${clamp(s.pos, 0, 100)}%`).join(", ");
+
+  if (type === "radial") {
+    const shape = meta.shape || "circle";
+    const at = meta.at || "center";
+    return `radial-gradient(${shape} at ${at}, ${stopsStr})`;
+  }
+
+  return `linear-gradient(${dir}, ${stopsStr})`;
+}
+
 function splitSize(value, fallbackUnit = "px") {
   if (!value) return { num: "", unit: fallbackUnit };
   if (value === "auto") return { num: "auto", unit: "auto" };
@@ -168,6 +234,8 @@ export default function EditorPage() {
 
   const [showBgPicker, setShowBgPicker] = useState(false);
   const [showTextColorPicker, setShowTextColorPicker] = useState(false);
+
+  const [bgMode, setBgMode] = useState("solid");
 
   const [showExtractModal, setShowExtractModal] = useState(false);
   const [extractedHtml, setExtractedHtml] = useState("");
@@ -422,84 +490,18 @@ export default function EditorPage() {
     };
   }, [currentBreakpoint]);
 
-  function getMaxHeaderHeightPx() {
-    const headers = elements.filter((e) => e.type === "header");
-    if (!headers.length) return 0;
+  const selectedEl = useMemo(() => elements.find((e) => e.id === selectedId), [elements, selectedId]);
 
-    let maxH = 0;
+  const selectedLayout = useMemo(
+    () => (selectedEl ? getEffectiveLayout(selectedEl, currentBreakpoint) : null),
+    [selectedEl, currentBreakpoint]
+  );
 
-    headers.forEach((h) => {
-      const node = editorRef.current?.querySelector(`[data-id="${h.id}"]`);
-      if (node?.offsetHeight) {
-        maxH = Math.max(maxH, node.offsetHeight);
-        return;
-      }
-      const layout = getEffectiveLayout(h, currentBreakpoint);
-      const hs = layout?.styles?.height;
-
-      if (typeof hs === "string") {
-        const m = hs.trim().match(/^(-?\d*\.?\d+)px$/);
-        if (m) {
-          const px = parseFloat(m[1]) || 0;
-          maxH = Math.max(maxH, px);
-          return;
-        }
-      }
-      maxH = Math.max(maxH, 80);
-    });
-
-    return maxH;
-  }
-  function addElement(type) {
-    const id = `c${idCounter.current++}`;
-    const isBar = type === "header" || type === "footer";
-    const headerH = isBar ? 0 : getMaxHeaderHeightPx();
-    const canvas = editorRef.current;
-    const scrollTop = canvas?.scrollTop || 0;
-
-    const spawnX = isBar ? 0 : 20;
-    const spawnY = isBar ? 0 : Math.max(20, scrollTop + headerH + 20);
-
-    const base = {
-      id,
-      type,
-      content:
-        type === "text"
-          ? "Texto"
-          : type === "button"
-          ? "Clique"
-          : type === "header"
-          ? ""
-          : type === "footer"
-          ? ""
-          : "",
-      styles: {
-        width: isBar ? "100%" : "160px",
-        height: isBar ? "80px" : type === "text" ? "auto" : "60px",
-        background: type === "button" ? "#1f2937" : isBar ? "#f1f5f9" : "transparent",
-        color: type === "button" ? "#ffffff" : "#111827",
-        padding: "8px",
-        fontSize: type === "text" || type === "button" ? "16px" : "",
-        fontFamily: "Arial",
-        borderRadius: isBar ? "0px" : "0px",
-        boxShadow: "",
-      },
-      position: {
-        x: spawnX,
-        y:
-          type === "footer"
-            ? pageHeight - 80
-            : type === "header"
-            ? 0
-            : spawnY,
-      },
-      meta: isBar ? { ...(type === "header" ? { sticky: true } : {}) } : {},
-      responsive: {},
-    };
-
-    setElements((prev) => [...prev, base]);
-    setSelectedId(id);
-  }
+  useEffect(() => {
+    if (!selectedEl) return;
+    const enabled = !!selectedEl.meta?.backgroundGradient?.enabled;
+    setBgMode(enabled ? "gradient" : "solid");
+  }, [selectedId, selectedEl?.meta?.backgroundGradient?.enabled]);
 
   function updateSelected(changes) {
     setElements((prev) =>
@@ -538,6 +540,154 @@ export default function EditorPage() {
         return next;
       })
     );
+  }
+
+  function updateSelectedBackgroundAll(bg, metaPatch = {}) {
+    setElements((prev) =>
+      prev.map((el) => {
+        if (el.id !== selectedId) return el;
+        const next = { ...el };
+
+        next.meta = { ...(next.meta || {}), ...metaPatch };
+        next.styles = { ...(next.styles || {}), background: bg };
+
+        if (next.responsive) {
+          const resp = { ...next.responsive };
+          ["laptop", "tablet", "mobile"].forEach((bp) => {
+            if (!resp[bp]) return;
+            resp[bp] = {
+              ...resp[bp],
+              styles: {
+                ...(resp[bp].styles || {}),
+                background: bg,
+              },
+            };
+          });
+          next.responsive = resp;
+        }
+
+        return next;
+      })
+    );
+  }
+
+  function getStoredSolidBg() {
+    const metaSolid = selectedEl?.meta?.backgroundSolid;
+    if (isHexColor(metaSolid)) return metaSolid;
+
+    const currentBg = selectedLayout?.styles?.background;
+    if (isHexColor(currentBg)) return currentBg;
+
+    return "#ffffff";
+  }
+
+  function setGradientMeta(nextMeta) {
+    const css = gradientToCss(nextMeta);
+    updateSelectedBackgroundAll(css || "#ffffff", { backgroundGradient: nextMeta });
+  }
+
+  function ensureGradientInitialized() {
+    const current = selectedEl?.meta?.backgroundGradient;
+    if (current?.enabled) return current;
+
+    const initial = {
+      enabled: true,
+      type: "linear",
+      direction: "to right",
+      stops: [
+        { color: "#3b82f6", pos: 0 },
+        { color: "#22c55e", pos: 100 },
+      ],
+    };
+
+    const solid = getStoredSolidBg();
+    const css = gradientToCss(initial);
+    updateSelectedBackgroundAll(css, { backgroundGradient: initial, backgroundSolid: solid });
+
+    return initial;
+  }
+
+  function disableGradientToSolid() {
+    const solid = getStoredSolidBg();
+    updateSelectedBackgroundAll(solid, {
+      backgroundGradient: { enabled: false },
+      backgroundSolid: solid,
+    });
+  }
+
+  function getMaxHeaderHeightPx() {
+    const headers = elements.filter((e) => e.type === "header");
+    if (!headers.length) return 0;
+
+    let maxH = 0;
+
+    headers.forEach((h) => {
+      const node = editorRef.current?.querySelector(`[data-id="${h.id}"]`);
+      if (node?.offsetHeight) {
+        maxH = Math.max(maxH, node.offsetHeight);
+        return;
+      }
+      const layout = getEffectiveLayout(h, currentBreakpoint);
+      const hs = layout?.styles?.height;
+
+      if (typeof hs === "string") {
+        const m = hs.trim().match(/^(-?\d*\.?\d+)px$/);
+        if (m) {
+          const px = parseFloat(m[1]) || 0;
+          maxH = Math.max(maxH, px);
+          return;
+        }
+      }
+      maxH = Math.max(maxH, 80);
+    });
+
+    return maxH;
+  }
+
+  function addElement(type) {
+    const id = `c${idCounter.current++}`;
+    const isBar = type === "header" || type === "footer";
+    const headerH = isBar ? 0 : getMaxHeaderHeightPx();
+    const canvas = editorRef.current;
+    const scrollTop = canvas?.scrollTop || 0;
+
+    const spawnX = isBar ? 0 : 20;
+    const spawnY = isBar ? 0 : Math.max(20, scrollTop + headerH + 20);
+
+    const base = {
+      id,
+      type,
+      content:
+        type === "text"
+          ? "Texto"
+          : type === "button"
+          ? "Clique"
+          : type === "header"
+          ? ""
+          : type === "footer"
+          ? ""
+          : "",
+      styles: {
+        width: isBar ? "100%" : "160px",
+        height: isBar ? "80px" : type === "text" ? "auto" : "60px",
+        background: type === "button" ? "#1f2937" : isBar ? "#f1f5f9" : "transparent",
+        color: type === "button" ? "#ffffff" : "#111827",
+        padding: "8px",
+        fontSize: type === "text" || type === "button" ? "16px" : "",
+        fontFamily: "Arial",
+        borderRadius: isBar ? "0px" : "0px",
+        boxShadow: "",
+      },
+      position: {
+        x: spawnX,
+        y: type === "footer" ? pageHeight - 80 : type === "header" ? 0 : spawnY,
+      },
+      meta: isBar ? { ...(type === "header" ? { sticky: true } : {}) } : {},
+      responsive: {},
+    };
+
+    setElements((prev) => [...prev, base]);
+    setSelectedId(id);
   }
 
   function removeSelected() {
@@ -1030,12 +1180,6 @@ ${html}
     );
   }
 
-  const selectedEl = useMemo(() => elements.find((e) => e.id === selectedId), [elements, selectedId]);
-  const selectedLayout = useMemo(
-    () => (selectedEl ? getEffectiveLayout(selectedEl, currentBreakpoint) : null),
-    [selectedEl, currentBreakpoint]
-  );
-
   const currentBreakpointConfig = BREAKPOINTS[currentBreakpoint];
 
   const headerElements = useMemo(() => elements.filter((e) => e.type === "header"), [elements]);
@@ -1193,6 +1337,7 @@ ${html}
                 ID: {selectedEl.id} ({selectedEl.type}) — editando{" "}
                 <span className="font-semibold">{BREAKPOINTS[currentBreakpoint].label}</span>
               </div>
+
               {selectedEl.type === "header" && (
                 <div className="mb-2">
                   <label className="block text-xs mb-1">Comportamento no scroll</label>
@@ -1218,87 +1363,283 @@ ${html}
                 units={["px", "%", "rem", "em", "vh", "auto"]}
               />
               <label className="block text-xs mb-1">Background</label>
-              <div className="mb-2 relative">
-                <button
-                  type="button"
-                  onClick={() => setShowBgPicker((v) => !v)}
-                  className="w-full input flex items-center gap-2 justify-between"
-                >
-                  <div className="flex items-center gap-2">
-                    <span
-                      className="w-5 h-5 rounded-full border"
-                      style={{ background: selectedLayout.styles?.background || "#ffffff" }}
-                    />
-                    <span className="text-sm">{(selectedLayout.styles?.background || "#ffffff").toUpperCase()}</span>
-                  </div>
-                  <span className="text-xs text-slate-500">clique para escolher</span>
-                </button>
+              <div className="mb-2">
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    className={`flex-1 input text-sm ${bgMode === "solid" ? "bg-slate-900 text-white" : ""}`}
+                    onClick={() => {
+                      setBgMode("solid");
+                      setShowBgPicker(false);
+                      disableGradientToSolid();
+                    }}
+                  >
+                    Cor sólida
+                  </button>
 
-                {showBgPicker && (
-                  <div className="absolute right-0 mt-2 z-50 p-3 bg-white border rounded shadow-lg w-64">
-                    <HexColorPicker
-                      color={selectedLayout.styles?.background || "#ffffff"}
-                      onChange={(color) => updateSelected({ styles: { background: color } })}
-                      style={{ width: "100%", height: 160 }}
-                    />
-                    <div className="flex items-center gap-2 mt-2">
-                      <span className="text-xs text-slate-500">Hex</span>
-                      <HexColorInput
-                        className="w-full input"
-                        color={selectedLayout.styles?.background || "#ffffff"}
-                        onChange={(color) => updateSelected({ styles: { background: color } })}
-                        prefixed
-                      />
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setShowBgPicker(false)}
-                      className="mt-2 w-full py-1 text-sm bg-slate-100 rounded hover:bg-slate-200"
-                    >
-                      Fechar
-                    </button>
-                  </div>
-                )}
+                  <button
+                    type="button"
+                    className={`flex-1 input text-sm ${bgMode === "gradient" ? "bg-slate-900 text-white" : ""}`}
+                    onClick={() => {
+                      setBgMode("gradient");
+                      setShowBgPicker(false);
+                      ensureGradientInitialized();
+                    }}
+                  >
+                    Gradient
+                  </button>
+                </div>
               </div>
+
+              {bgMode === "solid" ? (
+                <div className="mb-2 relative">
+                  {(() => {
+                    const solidBg = getStoredSolidBg();
+
+                    return (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setShowBgPicker((v) => !v)}
+                          className="w-full input flex items-center gap-2 justify-between"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="w-5 h-5 rounded-full border" style={{ background: solidBg }} />
+                            <span className="text-sm">{solidBg.toUpperCase()}</span>
+                          </div>
+                          <span className="text-xs text-slate-500">clique para escolher</span>
+                        </button>
+
+                        {showBgPicker && (
+                          <div className="absolute right-0 mt-2 z-50 p-3 bg-white border rounded shadow-lg w-64">
+                            <HexColorPicker
+                              color={safeHex(solidBg, "#ffffff")}
+                              onChange={(color) => {
+                                const c = safeHex(color, "#ffffff");
+                                updateSelectedBackgroundAll(c, {
+                                  backgroundSolid: c,
+                                  backgroundGradient: { enabled: false },
+                                });
+                              }}
+                              style={{ width: "100%", height: 160 }}
+                            />
+                            <div className="flex items-center gap-2 mt-2">
+                              <span className="text-xs text-slate-500">Hex</span>
+                              <HexColorInput
+                                className="w-full input"
+                                color={safeHex(solidBg, "#ffffff")}
+                                onChange={(color) => {
+                                  const c = safeHex(color, "#ffffff");
+                                  updateSelectedBackgroundAll(c, {
+                                    backgroundSolid: c,
+                                    backgroundGradient: { enabled: false },
+                                  });
+                                }}
+                                prefixed
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setShowBgPicker(false)}
+                              className="mt-2 w-full py-1 text-sm bg-slate-100 rounded hover:bg-slate-200"
+                            >
+                              Fechar
+                            </button>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+                </div>
+              ) : (
+                (() => {
+                  const gradientEnabled = !!selectedEl?.meta?.backgroundGradient?.enabled;
+                  const g = gradientEnabled ? selectedEl.meta.backgroundGradient : DEFAULT_GRADIENT;
+                  const stops = normalizeStops(g.stops);
+
+                  return (
+                    <div className="mb-3 p-2 border rounded">
+                      <div className="text-xs text-slate-600 mb-2">Preview</div>
+                      <div className="w-full rounded border" style={{ height: 34, background: gradientToCss(g) }} />
+
+                      <div className="mt-3 grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-xs mb-1">Tipo</label>
+                          <select
+                            className="w-full input"
+                            value={g.type || "linear"}
+                            onChange={(e) => {
+                              const base = ensureGradientInitialized();
+                              setGradientMeta({ ...base, type: e.target.value });
+                            }}
+                          >
+                            <option value="linear">Linear</option>
+                            <option value="radial">Radial</option>
+                          </select>
+                        </div>
+
+                        {g.type !== "radial" ? (
+                          <div>
+                            <label className="block text-xs mb-1">Direção</label>
+                            <select
+                              className="w-full input"
+                              value={g.direction || "to right"}
+                              onChange={(e) => {
+                                const base = ensureGradientInitialized();
+                                setGradientMeta({ ...base, direction: e.target.value });
+                              }}
+                            >
+                              {GRADIENT_DIRECTIONS.map((d) => (
+                                <option key={d.value} value={d.value}>
+                                  {d.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        ) : (
+                          <div>
+                            <label className="block text-xs mb-1">Centro (radial)</label>
+                            <select
+                              className="w-full input"
+                              value={g.at || "center"}
+                              onChange={(e) => {
+                                const base = ensureGradientInitialized();
+                                setGradientMeta({ ...base, at: e.target.value });
+                              }}
+                            >
+                              <option value="center">center</option>
+                              <option value="top">top</option>
+                              <option value="bottom">bottom</option>
+                              <option value="left">left</option>
+                              <option value="right">right</option>
+                              <option value="top left">top left</option>
+                              <option value="top right">top right</option>
+                              <option value="bottom left">bottom left</option>
+                              <option value="bottom right">bottom right</option>
+                            </select>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="mt-3 flex items-center justify-between">
+                        <div className="text-xs font-medium">Cores (stops)</div>
+                        <button
+                          type="button"
+                          className="text-xs px-2 py-1 rounded bg-slate-100 hover:bg-slate-200"
+                          onClick={() => {
+                            const base = ensureGradientInitialized();
+                            const baseStops = normalizeStops(base.stops);
+                            const nextStops = [...baseStops, { color: "#a855f7", pos: 100 }];
+                            setGradientMeta({ ...base, enabled: true, stops: nextStops });
+                          }}
+                        >
+                          + adicionar
+                        </button>
+                      </div>
+
+                      <div className="mt-2 space-y-2">
+                        {stops.map((s, idx) => (
+                          <div key={idx} className="flex items-center gap-2">
+                            <input
+                              type="color"
+                              value={safeHex(s.color, "#000000")}
+                              onChange={(e) => {
+                                const base = ensureGradientInitialized();
+                                const baseStops = normalizeStops(base.stops);
+                                const nextStops = baseStops.map((x, i) =>
+                                  i === idx ? { ...x, color: e.target.value } : x
+                                );
+                                setGradientMeta({ ...base, enabled: true, stops: nextStops });
+                              }}
+                              style={{ width: 40, height: 32, padding: 0, border: "none", background: "transparent" }}
+                            />
+
+                            <input
+                              className="input flex-1"
+                              type="number"
+                              min={0}
+                              max={100}
+                              value={s.pos}
+                              onChange={(e) => {
+                                const base = ensureGradientInitialized();
+                                const baseStops = normalizeStops(base.stops);
+                                const nextStops = baseStops.map((x, i) =>
+                                  i === idx ? { ...x, pos: clamp(e.target.value, 0, 100) } : x
+                                );
+                                setGradientMeta({ ...base, enabled: true, stops: nextStops });
+                              }}
+                            />
+
+                            <span className="text-xs text-slate-500">%</span>
+
+                            <button
+                              type="button"
+                              className="text-xs px-2 py-1 rounded bg-red-50 hover:bg-red-100 text-red-700"
+                              disabled={stops.length <= 2}
+                              onClick={() => {
+                                if (stops.length <= 2) return;
+                                const base = ensureGradientInitialized();
+                                const baseStops = normalizeStops(base.stops);
+                                const nextStops = baseStops.filter((_, i) => i !== idx);
+                                setGradientMeta({ ...base, enabled: true, stops: nextStops });
+                              }}
+                            >
+                              remover
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()
+              )}
+
               <label className="block text-xs mb-1">Text Color</label>
               <div className="mb-2 relative">
-                <button
-                  type="button"
-                  onClick={() => setShowTextColorPicker((v) => !v)}
-                  className="w-full input flex items-center gap-2 justify-between"
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="w-5 h-5 rounded-full border" style={{ background: selectedLayout.styles?.color || "#000000" }} />
-                    <span className="text-sm">{(selectedLayout.styles?.color || "#000000").toUpperCase()}</span>
-                  </div>
-                  <span className="text-xs text-slate-500">clique para escolher</span>
-                </button>
+                {(() => {
+                  const safeColor = safeHex(selectedLayout.styles?.color, "#000000");
+                  return (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setShowTextColorPicker((v) => !v)}
+                        className="w-full input flex items-center gap-2 justify-between"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="w-5 h-5 rounded-full border" style={{ background: safeColor }} />
+                          <span className="text-sm">{safeColor.toUpperCase()}</span>
+                        </div>
+                        <span className="text-xs text-slate-500">clique para escolher</span>
+                      </button>
 
-                {showTextColorPicker && (
-                  <div className="absolute right-0 mt-2 z-50 p-3 bg-white border rounded shadow-lg w-64">
-                    <HexColorPicker
-                      color={selectedLayout.styles?.color || "#000000"}
-                      onChange={(color) => updateSelected({ styles: { color } })}
-                      style={{ width: "100%", height: 160 }}
-                    />
-                    <div className="flex items-center gap-2 mt-2">
-                      <span className="text-xs text-slate-500">Hex</span>
-                      <HexColorInput
-                        className="w-full input"
-                        color={selectedLayout.styles?.color || "#000000"}
-                        onChange={(color) => updateSelected({ styles: { color } })}
-                        prefixed
-                      />
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setShowTextColorPicker(false)}
-                      className="mt-2 w-full py-1 text-sm bg-slate-100 rounded hover:bg-slate-200"
-                    >
-                      Fechar
-                    </button>
-                  </div>
-                )}
+                      {showTextColorPicker && (
+                        <div className="absolute right-0 mt-2 z-50 p-3 bg-white border rounded shadow-lg w-64">
+                          <HexColorPicker
+                            color={safeColor}
+                            onChange={(color) => updateSelected({ styles: { color: safeHex(color, "#000000") } })}
+                            style={{ width: "100%", height: 160 }}
+                          />
+                          <div className="flex items-center gap-2 mt-2">
+                            <span className="text-xs text-slate-500">Hex</span>
+                            <HexColorInput
+                              className="w-full input"
+                              color={safeColor}
+                              onChange={(color) => updateSelected({ styles: { color: safeHex(color, "#000000") } })}
+                              prefixed
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setShowTextColorPicker(false)}
+                            className="mt-2 w-full py-1 text-sm bg-slate-100 rounded hover:bg-slate-200"
+                          >
+                            Fechar
+                          </button>
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
 
               <SizeInput
@@ -1351,7 +1692,6 @@ ${html}
                 <option value="0 4px 10px rgba(0,0,0,0.25)">Média</option>
                 <option value="0 10px 25px rgba(0,0,0,0.3)">Forte</option>
               </select>
-
               {selectedEl.type !== "header" && selectedEl.type !== "footer" && (
                 <div className="mb-2">
                   <label className="block text-xs mb-1">Ancorar em</label>
@@ -1374,7 +1714,6 @@ ${html}
                   </select>
                 </div>
               )}
-
               {selectedEl.type === "button" && (
                 <>
                   <label className="block text-xs mb-1">Button Link (href)</label>
@@ -1395,7 +1734,6 @@ ${html}
                   </select>
                 </>
               )}
-
               <div className="flex gap-2 mt-3">
                 <button className="px-2 py-1 bg-red-600 text-white rounded" onClick={removeSelected}>
                   Remove
@@ -1446,7 +1784,7 @@ ${html}
               Salvar
             </button>
             <button className="flex-1 py-2 bg-indigo-700 text-white rounded" onClick={exportHTML}>
-              Exportar
+              Visualizar
             </button>
           </div>
 
@@ -1454,7 +1792,6 @@ ${html}
             Extrair código (HTML + CSS)
           </button>
         </div>
-
         <div className="flex-1">
           <div className="mb-2 text-sm text-gray-600">
             Editor — clique fora para desmarcar. Arraste para mover (exceto header/footer). Arraste cantos para
@@ -1520,7 +1857,6 @@ ${html}
           </div>
         </div>
       </div>
-
       <style>{`
         .editor-element.selected { outline: 2px dashed #2563eb; }
         .input { border: 1px solid #e5e7eb; padding: 6px; border-radius: 6px; }
