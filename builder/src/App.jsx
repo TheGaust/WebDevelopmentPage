@@ -11,8 +11,13 @@ function App() {
         <Route path="/" element={user ? <Navigate to="/projects" /> : <Login />} />
         <Route path="/projects" element={<ProjectsGallery />} />
         <Route path="/editor/:projectId" element={<EditorPage />} />
+        <Route path="/logout" element={<Logout />} />
       </Routes>
     </BrowserRouter>
   );
+}
+function Logout() {
+  localStorage.removeItem("pagebuilder:user");
+  return <Navigate to="/" replace />;
 }
 export default App;
