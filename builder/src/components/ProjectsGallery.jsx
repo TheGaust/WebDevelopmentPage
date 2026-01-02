@@ -12,7 +12,6 @@ export default function ProjectsGallery() {
   const users = useMemo(() => (admin ? listAllUsers() : []), [admin]);
   const [viewUser, setViewUser] = useState(me);
 
-  // ✅ força recomputar projects após delete
   const [refreshTick, setRefreshTick] = useState(0);
 
   const projects = useMemo(() => loadProjects(viewUser), [viewUser, refreshTick]);
@@ -28,14 +27,12 @@ export default function ProjectsGallery() {
   }
 
   function openProject(p) {
-    // ✅ se admin estiver vendo projetos de outro usuário, passa owner na URL
     const owner = viewUser;
     const q = admin && owner && owner !== me ? `?owner=${encodeURIComponent(owner)}` : "";
     nav(`/editor/${p.id}${q}`);
   }
 
   function newProject() {
-    // ✅ se admin estiver “vendo” outro usuário, pode criar projeto no contexto dele
     const owner = viewUser;
     const q = admin && owner && owner !== me ? `?owner=${encodeURIComponent(owner)}` : "";
     nav(`/editor/new${q}`);
@@ -92,7 +89,7 @@ export default function ProjectsGallery() {
               )}
             </div>
             <div className="text-xs text-slate-500 mt-2">
-              * Agora o botão <b>Abrir</b> funciona sem precisar “Entrar como”, usando <code>?owner=</code> na URL.
+              <b>Abrir</b><code>?owner=</code>
             </div>
           </div>
         )}

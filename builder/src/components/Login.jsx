@@ -523,8 +523,6 @@ export default function Login() {
                   <button type="button" className="text-slate-600 hover:underline" onClick={() => setMode("register")}>
                     Criar conta
                   </button>
-                  <span className="text-slate-400">•</span>
-                  <span className="text-slate-500">primeiro usuário vira admin</span>
                 </>
               ) : (
                 <>
