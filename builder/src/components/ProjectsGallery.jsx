@@ -1,74 +1,145 @@
-import { useEffect, useState } from "react";
+// src/components/ProjectsGallery.jsx
+import React, { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { loadProjects, saveProjects } from "../utils/storage";
+import { getSessionUser, isAdmin, logout, listAllUsers, setSessionUser } from "../utils/auth";
+import { loadProjects, deleteProject } from "../utils/storage";
 
-function ProjectCard({ project, onOpen, onDelete }) {
-  return (
-    <div className="w-1/5 p-2">
-      <div className="bg-white rounded shadow h-40 flex flex-col">
-        <div className="flex-1 overflow-hidden">
-          <img src={project.thumbnail} alt={project.title} className="w-full h-full object-cover" />
-        </div>
-        <div className="p-2 text-sm flex justify-between items-center">
-          <span>{project.title}</span>
-          <button onClick={(e)=>{e.stopPropagation(); onDelete(project.id);}} className="text-red-500">X</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-export default function ProjectsGallery(){
-  const [projects, setProjects] = useState([]);
+export default function ProjectsGallery() {
   const nav = useNavigate();
-  const user = localStorage.getItem("pagebuilder:user") || "anon";
+  const me = getSessionUser();
+  const admin = isAdmin(me);
 
-  useEffect(()=> {
-    setProjects(loadProjects(user));
-  }, []);
+  const users = useMemo(() => (admin ? listAllUsers() : []), [admin]);
+  const [viewUser, setViewUser] = useState(me);
 
-  function newBlank() {
-    // id gerado, estrutura vazia
-    const id = `p_${Date.now()}`;
-    const p = { id, title: "Página sem título", updatedAt: Date.now(), thumbnail: "/mnt/data/a9f4cb41-1eec-4232-938f-a6bbe7c0ed58.png", structure: { elements: [] } };
-    const arr = [p, ...projects];
-    setProjects(arr);
-    saveProjects(user, arr);
-    nav(`/editor/${p.id}`);
+  // ✅ força recomputar projects após delete
+  const [refreshTick, setRefreshTick] = useState(0);
+
+  const projects = useMemo(() => loadProjects(viewUser), [viewUser, refreshTick]);
+
+  function goLogout() {
+    logout();
+    nav("/", { replace: true });
   }
 
-  function openProject(id) {
-    nav(`/editor/${id}`);
+  function impersonate(u) {
+    setSessionUser(u);
+    setViewUser(u);
   }
 
-  function deleteProject(id){
-    const next = projects.filter(p=>p.id !== id);
-    setProjects(next);
-    saveProjects(user, next);
+  function openProject(p) {
+    // ✅ se admin estiver vendo projetos de outro usuário, passa owner na URL
+    const owner = viewUser;
+    const q = admin && owner && owner !== me ? `?owner=${encodeURIComponent(owner)}` : "";
+    nav(`/editor/${p.id}${q}`);
+  }
+
+  function newProject() {
+    // ✅ se admin estiver “vendo” outro usuário, pode criar projeto no contexto dele
+    const owner = viewUser;
+    const q = admin && owner && owner !== me ? `?owner=${encodeURIComponent(owner)}` : "";
+    nav(`/editor/new${q}`);
   }
 
   return (
-    <div className="p-4">
-      <h1 className="text-xl mb-4">Seus projetos</h1>
-      <div className="bg-white p-3 rounded shadow" style={{height: '520px', overflowY: 'auto'}}>
-        <div className="flex flex-wrap -mx-2">
-          {/* first card: new blank */}
-          <div className="w-1/5 p-2">
-            <div onClick={newBlank} className="h-40 bg-gray-100 rounded flex items-center justify-center cursor-pointer opacity-80">
-              <span className="text-4xl text-gray-400">+</span>
-            </div>
+    <div className="min-h-screen bg-slate-50 p-6">
+      <div className="max-w-6xl mx-auto">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="text-sm text-slate-500">Logado como</div>
+            <div className="text-xl font-semibold">{me}</div>
           </div>
 
-          {projects.slice(0, 20).map(p => (
-            <div key={p.id} className="w-1/5 p-2">
-              <div onClick={()=>openProject(p.id)} className="bg-white rounded shadow h-40 flex flex-col cursor-pointer">
-                <div className="flex-1 overflow-hidden">
-                  <img src={p.thumbnail} alt={p.title} className="w-full h-full object-cover" />
-                </div>
-                <div className="p-2 text-sm">{p.title}</div>
+          <div className="flex items-center gap-2">
+            {admin && (
+              <button
+                className="px-3 py-2 rounded bg-slate-900 text-white hover:bg-slate-800"
+                onClick={() => nav("/admin")}
+              >
+                Admin
+              </button>
+            )}
+            <button className="px-3 py-2 rounded bg-white border hover:bg-slate-100" onClick={goLogout}>
+              Sair
+            </button>
+          </div>
+        </div>
+
+        {admin && (
+          <div className="mt-5 p-4 bg-white border rounded-xl">
+            <div className="text-sm font-medium mb-2">Ver projetos de</div>
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                className="border rounded px-3 py-2"
+                value={viewUser}
+                onChange={(e) => setViewUser(e.target.value)}
+              >
+                {users.map((u) => (
+                  <option key={u.id} value={u.username}>
+                    {u.username} {u.isAdmin ? "(admin)" : ""}
+                  </option>
+                ))}
+              </select>
+
+              {viewUser !== me && (
+                <button
+                  className="px-3 py-2 rounded bg-indigo-600 text-white hover:bg-indigo-700"
+                  onClick={() => impersonate(viewUser)}
+                  title="Entra como esse usuário (para abrir editor etc)"
+                >
+                  Entrar como
+                </button>
+              )}
+            </div>
+            <div className="text-xs text-slate-500 mt-2">
+              * Agora o botão <b>Abrir</b> funciona sem precisar “Entrar como”, usando <code>?owner=</code> na URL.
+            </div>
+          </div>
+        )}
+
+        <div className="mt-6 flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Projetos</h2>
+          <button
+            className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700"
+            onClick={newProject}
+          >
+            Novo projeto
+          </button>
+        </div>
+
+        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {projects.map((p) => (
+            <div key={p.id} className="bg-white border rounded-xl p-4">
+              <div className="font-semibold">{p.title || "Sem título"}</div>
+              <div className="text-xs text-slate-500 mt-1">
+                Atualizado: {p.updatedAt ? new Date(p.updatedAt).toLocaleString() : "-"}
+              </div>
+
+              <div className="mt-3 flex gap-2">
+                <button
+                  className="flex-1 px-3 py-2 rounded bg-indigo-600 text-white hover:bg-indigo-700"
+                  onClick={() => openProject(p)}
+                >
+                  Abrir
+                </button>
+
+                <button
+                  className="px-3 py-2 rounded bg-white border hover:bg-red-50 hover:border-red-200 hover:text-red-700"
+                  onClick={() => {
+                    if (!window.confirm("Excluir este projeto?")) return;
+                    deleteProject(viewUser, p.id);
+                    setRefreshTick((t) => t + 1); // ✅ refresh garantido
+                  }}
+                >
+                  Excluir
+                </button>
               </div>
             </div>
           ))}
+
+          {!projects.length && (
+            <div className="text-slate-500 text-sm col-span-full">Nenhum projeto ainda.</div>
+          )}
         </div>
       </div>
     </div>

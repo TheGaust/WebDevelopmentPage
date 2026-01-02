@@ -1,5 +1,7 @@
+// src/components/Login.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { loginUser, registerUser, getSessionUser } from "../utils/auth";
 
 function clamp(n, min, max) {
   const v = Number(n);
@@ -10,9 +12,11 @@ function clamp(n, min, max) {
 export default function Login() {
   const nav = useNavigate();
 
+  const [mode, setMode] = useState("login"); // "login" | "register"
   const [user, setUser] = useState("");
   const [pass, setPass] = useState("");
   const [showPass, setShowPass] = useState(false);
+  const [busy, setBusy] = useState(false);
 
   const leftRef = useRef(null);
 
@@ -52,16 +56,19 @@ export default function Login() {
     []
   );
 
-  // jitter leve e estável por criatura (pra não parecer “régua”)
+  // jitter leve e estável por criatura
   const JITTER = useMemo(() => {
     return CREATURES.map((_, i) => {
       const a = Math.sin((i + 1) * 999) * 10000;
       const frac = a - Math.floor(a);
-      return (frac - 0.5) * 22; // -11..11 px
+      return (frac - 0.5) * 22;
     });
   }, [CREATURES]);
 
-  // init lookByIdx
+  useEffect(() => {
+    if (getSessionUser()) nav("/projects", { replace: true });
+  }, [nav]);
+
   useEffect(() => {
     setLookByIdx(CREATURES.map(() => ({ x: 0, y: 0 })));
   }, [CREATURES]);
@@ -122,13 +129,6 @@ export default function Login() {
     }
   }, [showPass, CREATURES.length]);
 
-  function handleLogin(e) {
-    e.preventDefault();
-    if (!user.trim()) return alert("Digite um nome");
-    localStorage.setItem("pagebuilder:user", user.trim());
-    nav("/projects");
-  }
-
   // Quem cutuca (vizinho do espião)
   const pokerIndex = useMemo(() => {
     if (spyIndex === null) return null;
@@ -137,11 +137,9 @@ export default function Login() {
     return null;
   }, [spyIndex, CREATURES.length]);
 
-  // ✅ calcula alvo (mouse / mistura com centro do input) e atualiza lookByIdx
   const updateLooks = () => {
     const m = mouseRef.current;
 
-    // quando showPass = true, ignoramos “curiosidade” do foco
     let focusPoint = null;
     if (!showPass && focusField) {
       const node = focusField === "user" ? userInputRef.current : passInputRef.current;
@@ -152,13 +150,9 @@ export default function Login() {
     }
 
     const target = focusPoint
-      ? {
-          x: m.x * 0.6 + focusPoint.x * 0.4,
-          y: m.y * 0.6 + focusPoint.y * 0.4,
-        }
+      ? { x: m.x * 0.6 + focusPoint.x * 0.4, y: m.y * 0.6 + focusPoint.y * 0.4 }
       : { x: m.x, y: m.y };
 
-    // normalização (ajuste fino do “alcance” dos olhos)
     const RANGE_X = 160;
     const RANGE_Y = 140;
 
@@ -168,27 +162,21 @@ export default function Login() {
 
       const r = node.getBoundingClientRect();
 
-      // centro “entre os olhos” (olhos começam em top=22, cada olho 16 => centro ~ 22 + 8 = 30)
       const eyeCenterX = r.left + r.width / 2;
       const eyeCenterY = r.top + 30;
 
       const dx = target.x - eyeCenterX;
       const dy = target.y - eyeCenterY;
 
-      return {
-        x: clamp(dx / RANGE_X, -1, 1),
-        y: clamp(dy / RANGE_Y, -1, 1),
-      };
+      return { x: clamp(dx / RANGE_X, -1, 1), y: clamp(dy / RANGE_Y, -1, 1) };
     });
 
     setLookByIdx(next);
   };
 
-  // mousemove -> rAF -> updateLooks
   useEffect(() => {
     function onMove(e) {
       mouseRef.current = { x: e.clientX, y: e.clientY };
-
       if (rafRef.current) return;
       rafRef.current = requestAnimationFrame(() => {
         rafRef.current = null;
@@ -204,15 +192,36 @@ export default function Login() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showPass, focusField, CREATURES]);
 
-  // quando muda awake/foco/privacidade/resize, recalcula (pra não ficar defasado)
   useEffect(() => {
     updateLooks();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [awake, focusField, showPass, stageW]);
 
+  async function onSubmit(e) {
+    e.preventDefault();
+    if (busy) return;
+
+    setBusy(true);
+    try {
+      const u = user.trim();
+      if (!u) return alert("Digite um nome de usuário.");
+
+      if (mode === "register") {
+        const res = await registerUser(u, pass);
+        if (!res.ok) return alert(res.error || "Falha ao cadastrar.");
+        nav("/projects");
+      } else {
+        const res = await loginUser(u, pass);
+        if (!res.ok) return alert(res.error || "Falha ao entrar.");
+        nav("/projects");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="min-h-screen bg-slate-100 overflow-x-hidden relative">
-      {/* sombreamento global */}
       <div
         className="absolute inset-0 pointer-events-none"
         style={{
@@ -225,7 +234,7 @@ export default function Login() {
       />
 
       <div className="relative z-10 min-h-screen w-full max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-2">
-        {/* ESQUERDA */}
+        {/* ESQUERDA (criaturas) */}
         <div ref={leftRef} className="relative px-6 pt-10 lg:pt-14 overflow-visible">
           <div className="max-w-xl">
             <div className="text-slate-600 text-sm mb-1">Bem-vindo ao PageBuilder</div>
@@ -234,25 +243,15 @@ export default function Login() {
             </div>
           </div>
 
-          {/* chão suave */}
           <div
             className="absolute left-0 right-0 bottom-0 h-36 pointer-events-none"
-            style={{
-              background: "linear-gradient(to top, rgba(15,23,42,0.03), transparent 78%)",
-            }}
+            style={{ background: "linear-gradient(to top, rgba(15,23,42,0.03), transparent 78%)" }}
           />
 
-          {/* Palco absoluto */}
           <div
             ref={stageRef}
             className="absolute pointer-events-none"
-            style={{
-              bottom: -95,
-              left: 0,
-              right: 0,
-              height: 620,
-              overflow: "visible",
-            }}
+            style={{ bottom: -95, left: 0, right: 0, height: 620, overflow: "visible" }}
           >
             {CREATURES.map((c, idx) => {
               const isPrivacy = showPass;
@@ -263,18 +262,16 @@ export default function Login() {
               let vx = clamp(l.x, -1, 1);
               let vy = clamp(l.y, -1, 1);
 
-              // evita vazar na diagonal (normaliza quando |v| > 1)
               const mag = Math.hypot(vx, vy);
               if (mag > 1) {
-              vx /= mag;
-              vy /= mag;
+                vx /= mag;
+                vy /= mag;
               }
 
-              const MAX_SHIFT = 3.6; // limite seguro p/ olho 16px e pupila 8px
+              const MAX_SHIFT = 3.6;
               const px = vx * MAX_SHIFT;
               const py = vy * MAX_SHIFT;
 
-              // corpo só “aproxima” quando focado e NÃO está em privacidade
               const curiousAllowed = !!focusField && !isPrivacy;
               const t = curiousAllowed ? 1 : 0;
 
@@ -302,7 +299,6 @@ export default function Login() {
                 translate3d(${leanX}px, ${leanY}px, 0)
               `;
 
-              // cores
               const hue = (205 + idx * 48) % 360;
               const bodyBg = `linear-gradient(
                 180deg,
@@ -312,29 +308,20 @@ export default function Login() {
               const borderColor = `hsla(${hue}, 35%, 30%, 0.12)`;
 
               const isPoker = nudge && pokerIndex === idx && spyIndex !== null;
-
               const pokerOnLeftOfSpy = isPoker && idx < spyIndex;
               const logicalSide = pokerOnLeftOfSpy ? "right" : "left";
+              const side = turnedBack ? (logicalSide === "right" ? "left" : "right") : logicalSide;
 
-              const side = turnedBack
-                ? logicalSide === "right"
-                  ? "left"
-                  : "right"
-                : logicalSide;
-
-              // POSICIONAMENTO POR ÍNDICE (mais pra esquerda)
               const n = CREATURES.length;
               const leftPad = 6;
               const rightPad = 6;
-
               const usableW = Math.max(0, stageW - leftPad - rightPad);
               const laneT = n <= 1 ? 0.5 : idx / (n - 1);
               const curvedT = Math.pow(laneT, 0.92);
               const laneX = leftPad + usableW * curvedT;
 
               const rawLeft = laneX - c.w / 2 + (JITTER[idx] || 0);
-              const leftPx =
-                stageW > 0 ? clamp(rawLeft, -10, stageW - c.w + 10) : idx * 92;
+              const leftPx = stageW > 0 ? clamp(rawLeft, -10, stageW - c.w + 10) : idx * 92;
 
               return (
                 <div
@@ -354,7 +341,6 @@ export default function Login() {
                   }}
                   aria-hidden
                 >
-                  {/* corpo */}
                   <div
                     className="absolute inset-0 rounded-2xl border"
                     style={{
@@ -364,7 +350,6 @@ export default function Login() {
                     }}
                   />
 
-                  {/* costas */}
                   {turnedBack && (
                     <div
                       className="absolute inset-0 rounded-2xl"
@@ -375,14 +360,9 @@ export default function Login() {
                     />
                   )}
 
-                  {/* olhos */}
                   <div
                     className="absolute left-1/2 -translate-x-1/2 flex gap-2"
-                    style={{
-                      top: 22,
-                      opacity: turnedBack ? 0 : awake ? 1 : 0.25,
-                      transition: "opacity 240ms ease",
-                    }}
+                    style={{ top: 22, opacity: turnedBack ? 0 : awake ? 1 : 0.25, transition: "opacity 240ms ease" }}
                   >
                     {[0, 1].map((eye) => (
                       <div
@@ -412,7 +392,6 @@ export default function Login() {
                     ))}
                   </div>
 
-                  {/* boca */}
                   <div
                     className="absolute left-1/2 -translate-x-1/2"
                     style={{
@@ -420,16 +399,11 @@ export default function Login() {
                       width: 18,
                       height: 3,
                       borderRadius: 999,
-                      background: turnedBack
-                        ? "transparent"
-                        : isSpy
-                        ? "rgba(15,23,42,0.45)"
-                        : "rgba(15,23,42,0.28)",
+                      background: turnedBack ? "transparent" : isSpy ? "rgba(15,23,42,0.45)" : "rgba(15,23,42,0.28)",
                       opacity: awake ? 1 : 0.25,
                     }}
                   />
 
-                  {/* cutucão */}
                   {isPoker && (
                     <>
                       <div
@@ -459,15 +433,10 @@ export default function Login() {
                     </>
                   )}
 
-                  {/* envergonhado */}
                   {nudge && isSpy && (
                     <div
                       className="absolute left-1/2 -translate-x-1/2 text-[12px]"
-                      style={{
-                        top: 8,
-                        userSelect: "none",
-                        animation: "blush 900ms ease-in-out infinite",
-                      }}
+                      style={{ top: 8, userSelect: "none", animation: "blush 900ms ease-in-out infinite" }}
                     >
                       😳
                     </div>
@@ -489,15 +458,15 @@ export default function Login() {
           `}</style>
         </div>
 
-        {/* DIREITA: LOGIN */}
+        {/* DIREITA: LOGIN/CADASTRO */}
         <div className="flex items-center justify-center px-6 py-10">
           <form
-            onSubmit={handleLogin}
+            onSubmit={onSubmit}
             className="w-full max-w-md bg-white rounded-2xl p-8 shadow-[0_18px_45px_rgba(15,23,42,0.10)]"
           >
-            <h2 className="text-2xl font-semibold text-center">Entrar</h2>
+            <h2 className="text-2xl font-semibold text-center">{mode === "login" ? "Entrar" : "Cadastrar"}</h2>
             <p className="text-sm text-slate-500 text-center mt-1">
-              Digite seu usuário e senha para continuar.
+              {mode === "login" ? "Digite seu usuário e senha." : "Crie um usuário (nome único) e uma senha."}
             </p>
 
             <div className="mt-6">
@@ -535,14 +504,38 @@ export default function Login() {
                   {showPass ? "🙈" : "👁️"}
                 </button>
               </div>
+              {mode === "register" && <div className="text-xs text-slate-500 mt-1">mínimo 4 caracteres</div>}
             </div>
 
             <button
               type="submit"
-              className="w-full mt-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium"
+              disabled={busy}
+              className={`w-full mt-6 py-2.5 rounded-lg font-medium text-white ${
+                busy ? "bg-blue-400" : "bg-blue-600 hover:bg-blue-700"
+              }`}
             >
-              Entrar
+              {busy ? "..." : mode === "login" ? "Entrar" : "Cadastrar"}
             </button>
+
+            <div className="mt-4 flex items-center justify-between text-sm">
+              {mode === "login" ? (
+                <>
+                  <button type="button" className="text-slate-600 hover:underline" onClick={() => setMode("register")}>
+                    Criar conta
+                  </button>
+                  <span className="text-slate-400">•</span>
+                  <span className="text-slate-500">primeiro usuário vira admin</span>
+                </>
+              ) : (
+                <>
+                  <button type="button" className="text-slate-600 hover:underline" onClick={() => setMode("login")}>
+                    Já tenho conta
+                  </button>
+                  <span className="text-slate-400">•</span>
+                  <span className="text-slate-500">username é único</span>
+                </>
+              )}
+            </div>
           </form>
         </div>
       </div>

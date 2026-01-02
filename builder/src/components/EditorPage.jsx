@@ -223,7 +223,14 @@ export default function EditorPage() {
   const nav = useNavigate();
   const { projectId } = useParams();
 
-  const user = localStorage.getItem("pagebuilder:user");
+  const sessionUser = localStorage.getItem("pagebuilder:user");
+
+  const owner = useMemo(() => {
+    const sp = new URLSearchParams(window.location.search);
+    return (sp.get("owner") || "").trim();
+  }, []);
+
+  const user = owner || sessionUser;
   const [title, setTitle] = useState("Página sem título");
 
   const [elements, setElements] = useState([]);
@@ -252,7 +259,7 @@ export default function EditorPage() {
   }, [elements]);
 
   useEffect(() => {
-    if (!user) {
+    if (!sessionUser) {
       nav("/");
       return;
     }
@@ -710,7 +717,10 @@ export default function EditorPage() {
   function onSave() {
     const proj = buildProjectObj();
     saveProject(user, proj);
-    if (!projectId) nav(`/editor/${proj.id}`, { replace: true });
+    if (!projectId) {
+      const q = owner ? `?owner=${encodeURIComponent(owner)}` : "";
+      nav(`/editor/${proj.id}${q}`, { replace: true });
+    }
     alert("Projeto salvo!");
   }
 
